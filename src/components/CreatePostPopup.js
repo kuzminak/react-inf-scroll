@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useState, useRef, useEffect} from 'react';
 import './styles.css'; 
 import ReactDOM from 'react-dom';
 import { SubmitHandler, useForm } from 'react-hook-form'; 
@@ -12,21 +12,12 @@ export default function CreatePostPopup({show, onCloseButtonClick, onCreatePost,
     const url = 'https://10.59.62.240:3001/send';
     const responseField = document.querySelector('#responseField');
 
-    function renderResponse(res) {
-        if (res.errors){
-          responseField.innerHTML = "<p>Sorry, couldn't upload your post.</p><p>Try again.</p>";
-        } else {  
-          responseField.innerHTML = `<p>Your post was uploaded! </p>`;
-        }
-      }
+    const [file, setFile] = useState(null); // The file that I uploaded locally
+    const [uploadedChunks, setUploadedChunks] = useState([]); // The list of chunks that have been uploaded
+    const [uploading, setUploading] = useState(false); // Whether the upload is in progress
+    const uploadRequestRef = useRef(null); // A reference to the current upload request
 
     async function onSubmit (data) {
-        // onCreatePost(posts => [...posts, {
-        //     id: data.id,
-        //     title: data.title,
-        //     text: data.text,
-        //     imgSrc: data.imageSrc,
-        // }]);
         const post = JSON.stringify({
             id: data.id,
             title: data.title,
@@ -45,7 +36,6 @@ export default function CreatePostPopup({show, onCloseButtonClick, onCreatePost,
 
             if (response.ok) {
                 const jsonResponse = await response.json();
-                renderResponse(jsonResponse);
             } else {
                 console.error(response.statusText)
             }
@@ -53,46 +43,83 @@ export default function CreatePostPopup({show, onCloseButtonClick, onCreatePost,
         } catch (error) {
             console.log(error);
         }
-
-        const file = data.fileSrc[0];
-        const chunkSize = 1024;
-
-        if (file) {
-            const totalChunks = Math.ceil(file.size/chunkSize);
-
-            const sendChunk = async (start, end) =>{
-                const blobSlice = file.slice(start, end);
-
-                try {
-                    const response = await fetch('https://10.59.62.240:3001/send', {
-                        method: 'POST',
-                        body: blobSlice,
-                        headers: {
-                            'Content-type': 'application/octet-stream'
-                        }
-                    })
         
-                    if (response.ok) {
-                        const jsonResponse = await response.json();
-                        renderResponse(jsonResponse);
-                    } else {
-                        console.error(response.statusText)
+        if (data.fileSrc[0]) {
+            setFile(data.fileSrc[0])
+        }
+    
+        const sendChunk = async (chunk) =>{
+
+            try {
+                const response = await fetch(`https://10.59.62.240:3001/file?name=${file.name}`, {
+                    method: 'POST',
+                    body: chunk,
+                    headers: {
+                        'Content-type': 'application/octet-stream'
                     }
-        
-                } catch (error) {
-                    console.log(error);
-                }
-            }
+                })
 
-            for(let i=0; i<totalChunks; i++) {
-                    const start = i*chunkSize;
-                    const end = (i + 1) * chunkSize;
-                    await sendChunk(start, end);
+                if (response.ok) {
+                    const jsonResponse = await response.json();
+                } else {
+                    console.error(response.statusText)
+                }
+
+            } catch (error) {
+                console.log(error);
             }
         }
 
+
+        if (!file) {
+            alert("Please select a file to upload!");
+            return;
+        }
+
+        const chunkSize = 1024; // 1MB
+        const totalChunks = Math.ceil(file.size / chunkSize);
+
+        let start = 0;
+        let end = Math.min(chunkSize, file.size);
+
+        setUploading(true);
+
+        for (let i = 0; i < totalChunks; i++) {
+            const chunk = file.slice(start, end);
+            const uploadedChunkIndex = uploadedChunks.indexOf(i);
+
+            if (uploadedChunkIndex === -1) {
+                try {
+                    const response = await sendChunk(chunk);
+                    setUploadedChunks((prevChunks) => [...prevChunks, i]);
+
+                    // Save the list of uploaded chunks to local storage
+                    localStorage.setItem("uploadedChunks", JSON.stringify(uploadedChunks));
+                } catch (error) {
+                    console.error(error); // Handle the error
+                }
+            }
+
+        start = end;
+        end = Math.min(start + chunkSize, file.size);
+        
+
+        setUploading(false);
+
+        // Upload is complete, clear the list of uploaded chunks from local storage
+        localStorage.removeItem("uploadedChunks");
+        };
+
         setSubmit(true);
     }
+
+    useEffect(() => {
+        const storedUploadedChunks = localStorage.getItem("uploadedChunks");
+
+        if (storedUploadedChunks) {
+            setUploadedChunks(JSON.parse(storedUploadedChunks));
+        }
+    }, []);
 
     function handleClose() {
         onCloseButtonClick();
